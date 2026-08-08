@@ -73,7 +73,13 @@ public class NotificationService {
 
 
     private void sendEmail(SimpleMailMessage mailMessage, Notification notification) {
-
+        try {
+            mailSender.send(mailMessage);                          // ← now the verify counts this
+            notification.setStatus(NotificationStatus.SUCCEEDED);
+        } catch (Exception e) {
+            log.error("Mail send failed due to: {}", e.getMessage());
+            notification.setStatus(NotificationStatus.FAILED);
+        }
     }
 
     public List<Notification> getHistory(UUID userId) {
