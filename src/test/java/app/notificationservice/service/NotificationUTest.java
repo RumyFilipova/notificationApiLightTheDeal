@@ -3,6 +3,7 @@ import app.notificationservice.entity.Notification;
 import app.notificationservice.entity.NotificationPreference;
 import app.notificationservice.entity.NotificationStatus;
 import app.notificationservice.repository.NotificationRepository;
+import app.notificationservice.web.DTOs.NotificationRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -10,14 +11,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mail.MailSender;
 import org.springframework.mail.SimpleMailMessage;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.prefs.Preferences;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -80,5 +78,69 @@ public class NotificationUTest  {
        assertEquals(NotificationStatus.SUCCEEDED, failedNotification1.getStatus());
        assertEquals(NotificationStatus.SUCCEEDED, failedNotification2.getStatus());
        assertEquals(NotificationStatus.FAILED, failedNotification3.getStatus());
+    }
+
+    @Test
+    void send_whenPreferenceDisabled_throws() {
+        UUID userId = UUID.randomUUID();
+        NotificationRequest request = NotificationRequest.builder().userId(userId).subject("S").body("B").build();
+        when(notificationPreferenceService.getByUserId(userId))
+                .thenReturn(NotificationPreference.builder().enabled(false).build());
+
+        assertThrows(IllegalStateException.class, () -> notificationService.send(request));
+        verify(notificationRepository, never()).save(any());
+    }
+
+    @Test
+    void send_whenEnabled_savesSucceeded() {
+        UUID userId = UUID.randomUUID();
+        NotificationRequest request = NotificationRequest.builder().userId(userId).subject("S").body("B").build();
+        when(notificationPreferenceService.getByUserId(userId))
+                .thenReturn(NotificationPreference.builder().enabled(true).contactInfo("a@mail.com").build());
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Notification result = notificationService.send(request);
+
+        assertEquals(NotificationStatus.SUCCEEDED, result.getStatus());
+        verify(mailSender).send(any(SimpleMailMessage.class));
+    }
+
+    @Test
+    void send_whenMailFails_savesFailed() {
+        UUID userId = UUID.randomUUID();
+        NotificationRequest request = NotificationRequest.builder().userId(userId).subject("S").body("B").build();
+        when(notificationPreferenceService.getByUserId(userId))
+                .thenReturn(NotificationPreference.builder().enabled(true).contactInfo("a@mail.com").build());
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new RuntimeException("smtp down")).when(mailSender).send(any(SimpleMailMessage.class));
+
+        Notification result = notificationService.send(request);
+
+        assertEquals(NotificationStatus.FAILED, result.getStatus());
+    }
+
+    @Test
+    void getHistory_returnsOnlyNotDeleted() {
+        UUID userId = UUID.randomUUID();
+        Notification kept = Notification.builder().deleted(false).build();
+        Notification gone = Notification.builder().deleted(true).build();
+        when(notificationRepository.findByUserId(userId)).thenReturn(List.of(kept, gone));
+
+        List<Notification> result = notificationService.getHistory(userId);
+
+        assertEquals(1, result.size());
+        assertSame(kept, result.get(0));
+    }
+
+    @Test
+    void deleteHistory_marksNotDeletedAsDeleted() {
+        UUID userId = UUID.randomUUID();
+        Notification n = Notification.builder().deleted(false).build();
+        when(notificationRepository.findByUserId(userId)).thenReturn(List.of(n));
+
+        notificationService.deleteHistory(userId);
+
+        assertTrue(n.isDeleted());
+        verify(notificationRepository).save(n);
     }
 }
